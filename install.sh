@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# install.sh — Install the Laravel CI/CD skill and templates into Claude Code
+# install.sh — Install the Laravel CI/CD skills and templates into Claude Code
 #
 # Run from the repo root:
 #   bash install.sh
@@ -15,7 +15,7 @@ SKILLS_DIR="${HOME}/.claude/skills"
 TEMPLATES_DIR="${HOME}/.claude/cicd-templates"
 
 log()  { echo "[install] $*"; }
-done() { echo "[install] ✓ $*"; }
+ok()   { echo "[install] ✓ $*"; }
 
 # ---------------------------------------------------------------
 # 1. Create target directories
@@ -27,20 +27,7 @@ mkdir -p "${TEMPLATES_DIR}/docker/nginx/conf.d"
 mkdir -p "${TEMPLATES_DIR}/setup"
 
 # ---------------------------------------------------------------
-# 2. Install the skill file
-# ---------------------------------------------------------------
-SKILL_DEST="${SKILLS_DIR}/cicd-setup.md"
-
-if [ -f "${SKILL_DEST}" ]; then
-  cp "${SKILL_DEST}" "${SKILL_DEST}.bak"
-  log "Backed up existing skill to ${SKILL_DEST}.bak"
-fi
-
-cp "${REPO_DIR}/skill.md" "${SKILL_DEST}"
-done "Skill installed → ${SKILL_DEST}"
-
-# ---------------------------------------------------------------
-# 3. Install template files
+# 2. Install skill files
 # ---------------------------------------------------------------
 install_file() {
   local src="$1"
@@ -49,12 +36,24 @@ install_file() {
     cp "${dest}" "${dest}.bak"
   fi
   cp "${src}" "${dest}"
-  done "$(basename "${src}") → ${dest}"
+  ok "$(basename "${src}") → ${dest}"
 }
 
+log "Installing skills..."
+install_file "${REPO_DIR}/skills/cicd-setup.md"   "${SKILLS_DIR}/cicd-setup.md"
+install_file "${REPO_DIR}/skills/new-project.md"  "${SKILLS_DIR}/new-project.md"
+install_file "${REPO_DIR}/skills/rollback.md"      "${SKILLS_DIR}/rollback.md"
+
+# ---------------------------------------------------------------
+# 3. Install template files
+# ---------------------------------------------------------------
+log "Installing templates..."
+
 # Workflows
-install_file "${REPO_DIR}/templates/workflows/ci.yml"              "${TEMPLATES_DIR}/workflows/ci.yml"
-install_file "${REPO_DIR}/templates/workflows/cd.yml"              "${TEMPLATES_DIR}/workflows/cd.yml"
+install_file "${REPO_DIR}/templates/workflows/ci-caller.yml"       "${TEMPLATES_DIR}/workflows/ci-caller.yml"
+install_file "${REPO_DIR}/templates/workflows/cd-caller.yml"       "${TEMPLATES_DIR}/workflows/cd-caller.yml"
+install_file "${REPO_DIR}/templates/workflows/ci-standalone.yml"   "${TEMPLATES_DIR}/workflows/ci-standalone.yml"
+install_file "${REPO_DIR}/templates/workflows/cd-standalone.yml"   "${TEMPLATES_DIR}/workflows/cd-standalone.yml"
 install_file "${REPO_DIR}/templates/workflows/cd-production.yml"   "${TEMPLATES_DIR}/workflows/cd-production.yml"
 
 # Docker build files
@@ -74,6 +73,7 @@ install_file "${REPO_DIR}/templates/docker/nginx/conf.d/app.conf"  "${TEMPLATES_
 # Server setup
 install_file "${REPO_DIR}/templates/setup/server-setup.sh"         "${TEMPLATES_DIR}/setup/server-setup.sh"
 install_file "${REPO_DIR}/templates/setup/nginx-host.conf"         "${TEMPLATES_DIR}/setup/nginx-host.conf"
+install_file "${REPO_DIR}/templates/setup/rollback.sh"             "${TEMPLATES_DIR}/setup/rollback.sh"
 install_file "${REPO_DIR}/templates/setup/secrets-reference.md"    "${TEMPLATES_DIR}/setup/secrets-reference.md"
 install_file "${REPO_DIR}/templates/setup/branch-protection.md"    "${TEMPLATES_DIR}/setup/branch-protection.md"
 
@@ -84,9 +84,10 @@ echo ""
 echo "============================================================"
 echo " Installation complete!"
 echo ""
-echo " Skill:     ${SKILL_DEST}"
-echo " Templates: ${TEMPLATES_DIR}/"
+echo " Skills installed (3):"
+echo "   /cicd-setup    — generate CI/CD files for any Laravel project"
+echo "   /new-project   — scaffold a new Laravel project end-to-end"
+echo "   /rollback      — roll back a production deployment"
 echo ""
-echo " Usage: open any Laravel project in Claude Code and run"
-echo "        /cicd-setup"
+echo " Templates: ${TEMPLATES_DIR}/"
 echo "============================================================"

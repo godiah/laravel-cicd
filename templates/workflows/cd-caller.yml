@@ -1,0 +1,28 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    uses: godiah/laravel-cicd/.github/workflows/laravel-cd.yml@main
+    with:
+      github-repo-owner: '{{GITHUB_REPO_OWNER}}'
+      app-name-slug: '{{APP_NAME_SLUG}}'
+      deploy-path: '{{DEPLOY_PATH}}'
+      prod-domain: '{{PROD_DOMAIN}}'
+      db-service-name: '{{DB_SERVICE_NAME}}'
+      has-horizon: {{HAS_HORIZON}}
+      has-tenancy: {{HAS_TENANCY}}
+      skip-migrate: {{SKIP_MIGRATE}}
+      has-seed: {{HAS_SEED}}
+      prod-ready: true
+      # Set prod-ready: false until the server is provisioned,
+      # then flip to true to enable deploys.
+    secrets: inherit

@@ -111,6 +111,12 @@ else:
 
 Use the templates in `~/.claude/cicd-templates/` as the starting point. Copy each template and substitute all `{{PLACEHOLDER}}` values. Do NOT leave any `{{PLACEHOLDER}}` in the final files.
 
+**Preferred approach — reusable workflows (thin callers):**
+Use `ci-caller.yml` and `cd-caller.yml` templates. These delegate all logic to the central reusable workflows in `godiah/laravel-cicd`. When the central workflows improve, all projects get the update automatically. The caller files are tiny (~15–20 lines each).
+
+**Fallback — standalone workflows:**
+Use `ci-standalone.yml` and `cd-standalone.yml` if the project cannot call `godiah/laravel-cicd` (e.g. different GitHub org, or the project needs non-standard customization). The standalone files are self-contained and fully parameterized.
+
 Work through files in this order:
 
 ### 1. Create directory structure
@@ -118,8 +124,33 @@ Work through files in this order:
 mkdir -p .github/workflows .github/setup docker/php docker/nginx/conf.d
 ```
 
-### 2. `.github/workflows/ci.yml`
-Use `~/.claude/cicd-templates/workflows/ci.yml` as base.
+### 2. `.github/workflows/ci.yml` (caller — preferred)
+Use `~/.claude/cicd-templates/workflows/ci-caller.yml` as base.
+
+Key substitutions:
+- `{{PHP_VERSION}}` — from detection (e.g. `8.4`)
+- `{{DB_TYPE}}` — `mysql` or `pgsql`
+- `{{HAS_VITE}}` — `true` or `false`
+- `{{HAS_PHPSTAN}}` — `true` or `false`
+- `{{HAS_TENANCY}}` — `true` or `false`
+- `{{APP_NAME_SLUG}}` — hyphenated app name (e.g. `pokeapay-donations`)
+
+### 3. `.github/workflows/cd.yml` (caller — preferred)
+Use `~/.claude/cicd-templates/workflows/cd-caller.yml` as base.
+
+Key substitutions:
+- `{{GITHUB_REPO_OWNER}}` — GitHub username (e.g. `godiah`)
+- `{{APP_NAME_SLUG}}` — hyphenated app name
+- `{{DEPLOY_PATH}}` — `/opt/{{APP_NAME_SLUG}}`
+- `{{PROD_DOMAIN}}` — production domain
+- `{{DB_SERVICE_NAME}}` — `mysql` or `postgres`
+- `{{HAS_HORIZON}}` — `true` or `false`
+- `{{HAS_TENANCY}}` — `true` or `false`
+- `{{SKIP_MIGRATE}}` — `true` if this app does NOT own the schema
+- `{{HAS_SEED}}` — `true` if project has idempotent seeders
+
+### [ALTERNATIVE] `.github/workflows/ci.yml` (standalone)
+Use `~/.claude/cicd-templates/workflows/ci-standalone.yml` only if reusable workflow approach is not viable.
 
 Key substitutions:
 - `{{PHP_VERSION}}` — from detection

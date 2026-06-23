@@ -1,0 +1,220 @@
+name: Laravel CD (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      github-repo-owner:
+        description: 'GitHub username / org that owns the GHCR packages'
+        type: string
+        required: true
+      app-name-slug:
+        description: 'Hyphenated app name (used in GHCR image path)'
+        type: string
+        required: true
+      deploy-path:
+        description: 'Absolute path to the app on the production server (e.g. /opt/my-app)'
+        type: string
+        required: true
+      prod-domain:
+        description: 'Production domain (e.g. api.myapp.com)'
+        type: string
+        required: true
+      db-service-name:
+        description: 'Compose service name for the database: mysql or postgres'
+        type: string
+        default: 'mysql'
+      has-horizon:
+        description: 'Whether to run the Horizon graceful drain + restart'
+        type: boolean
+        default: true
+      has-tenancy:
+        description: 'Whether to run tenants:migrate (Stancl Tenancy)'
+        type: boolean
+        default: false
+      skip-migrate:
+        description: 'Skip php artisan migrate (for apps that do not own the schema)'
+        type: boolean
+        default: false
+      has-seed:
+        description: 'Whether to run php artisan db:seed after migrations'
+        type: boolean
+        default: false
+      dockerfile:
+        description: 'Path to the production Dockerfile'
+        type: string
+        default: 'Dockerfile.production'
+      prod-ready:
+        description: 'Set to false to skip the deploy job until the server is provisioned'
+        type: boolean
+        default: true
+    secrets:
+      GHCR_PULL_TOKEN:
+        required: true
+      PROD_SSH_HOST:
+        required: true
+      PROD_SSH_USER:
+        required: true
+      PROD_SSH_KEY:
+        required: true
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1 — Build both Docker images and push to GHCR
+  # -----------------------------------------------------------------------
+  build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta-app.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- App image (production stage) ----
+      - name: Extract metadata — app image
+        id: meta-app
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ inputs.github-repo-owner }}/${{ inputs.app-name-slug }}
+          tags: |
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          target: production
+          push: true
+          tags: ${{ steps.meta-app.outputs.tags }}
+          labels: ${{ steps.meta-app.outputs.labels }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      # ---- Nginx image (web stage) ----
+      - name: Extract metadata — nginx image
+        id: meta-nginx
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ inputs.github-repo-owner }}/${{ inputs.app-name-slug }}
+          tags: |
+            type=sha,format=short,prefix=nginx-sha-
+            type=raw,value=nginx-latest,enable={{is_default_branch}}
+
+      - name: Build and push nginx image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          target: web
+          push: true
+          tags: ${{ steps.meta-nginx.outputs.tags }}
+          labels: ${{ steps.meta-nginx.outputs.labels }}
+          cache-from: type=gha,scope=nginx
+          cache-to: type=gha,mode=max,scope=nginx
+
+  # -----------------------------------------------------------------------
+  # Job 2 — Deploy to production VPS via SSH
+  # -----------------------------------------------------------------------
+  deploy:
+    name: Deploy to Production (${{ inputs.prod-domain }})
+    needs: build
+    if: inputs.prod-ready
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://${{ inputs.prod-domain }}
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          SHORT_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          envs: GHCR_TOKEN,GHCR_USER,SHORT_SHA
+          script: |
+            set -euo pipefail
+            cd ${{ inputs.deploy-path }}
+
+            git pull --ff-only
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            echo "APP_IMAGE_TAG=sha-${SHORT_SHA:0:7}" > .image-tag.env
+
+            COMPOSE="docker compose -f docker-compose.prod.yaml --env-file .image-tag.env"
+
+            # Pull new images — determine which services to pull
+            PULL_SVCS="app nginx scheduler"
+            if [ "${{ inputs.has-horizon }}" = "true" ]; then PULL_SVCS="$PULL_SVCS horizon"; fi
+            $COMPOSE pull $PULL_SVCS
+
+            # Ensure DB and Redis are healthy before any artisan commands
+            $COMPOSE up -d --no-deps --wait ${{ inputs.db-service-name }} redis
+
+            # Migrations — skip if this app doesn't own the schema
+            if [ "${{ inputs.skip-migrate }}" != "true" ]; then
+              $COMPOSE run --rm --no-deps app php artisan migrate --force
+            fi
+
+            # Tenant migrations (Stancl Tenancy)
+            if [ "${{ inputs.has-tenancy }}" = "true" ]; then
+              $COMPOSE run --rm --no-deps app php artisan tenants:migrate --force
+            fi
+
+            # Reference data seed — safe only if seeders use updateOrCreate/firstOrCreate
+            if [ "${{ inputs.has-seed }}" = "true" ]; then
+              $COMPOSE run --rm --no-deps app php artisan db:seed --force
+            fi
+
+            # Ensure storage symlink (survives volume remounts)
+            $COMPOSE run --rm --no-deps app php artisan storage:link --force
+
+            # Rolling app restart — blocks until healthcheck passes
+            $COMPOSE up -d --no-deps --wait app
+
+            # Rebuild all framework caches inside the new container
+            $COMPOSE exec -T app php artisan config:cache
+            $COMPOSE exec -T app php artisan route:cache
+            $COMPOSE exec -T app php artisan view:cache
+            $COMPOSE exec -T app php artisan event:cache
+
+            # Horizon: graceful drain then restart
+            if [ "${{ inputs.has-horizon }}" = "true" ]; then
+              $COMPOSE exec -T horizon php artisan horizon:terminate || true
+              echo "Waiting for Horizon to drain..."
+              for i in $(seq 1 30); do
+                STATUS=$(docker compose -f docker-compose.prod.yaml \
+                  exec -T horizon php artisan horizon:status 2>/dev/null || echo "inactive")
+                echo "  Horizon status: $STATUS (attempt $i/30)"
+                echo "$STATUS" | grep -qi "inactive\|stopped" && break
+                sleep 5
+              done
+              $COMPOSE up -d --no-deps horizon scheduler
+            else
+              $COMPOSE up -d --no-deps scheduler
+            fi
+
+            # Swap nginx to new image (zero-downtime: nginx reload is instant)
+            $COMPOSE up -d --no-deps --wait nginx
+
+            # Reclaim disk space
+            docker image prune -f
+
+            echo "Deploy complete: sha-${SHORT_SHA:0:7}"

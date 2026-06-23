@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, 'feature/**']
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pipeline:
+    uses: godiah/laravel-cicd/.github/workflows/laravel-ci.yml@main
+    with:
+      php-version: '{{PHP_VERSION}}'
+      db-type: '{{DB_TYPE}}'
+      has-vite: {{HAS_VITE}}
+      has-phpstan: {{HAS_PHPSTAN}}
+      has-tenancy: {{HAS_TENANCY}}
+      app-name-slug: '{{APP_NAME_SLUG}}'
+    secrets: inherit
