@@ -1,0 +1,48 @@
+# Version control
+.git
+.gitattributes
+.gitignore
+
+# Dependencies (re-installed inside Dockerfile)
+vendor/
+node_modules/
+
+# Local environment files (never bake secrets into the image)
+.env
+.env.*
+!.env.example
+
+# Development / test artifacts
+tests/
+.github/
+docs/
+*.md
+!README.md
+
+# IDE and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Laravel development tools
+.phpunit.result.cache
+phpstan-baseline.neon
+phpstan.neon
+pint.json
+phpunit.xml
+
+# Docker development files (not needed in the image)
+docker-compose.yml
+docker-compose.*.yml
+compose.yaml
+docker-compose.prod.yaml
+
+# Build outputs that get regenerated inside the container
+public/hot
+public/storage
+storage/framework/cache/data/
+storage/framework/sessions/
+storage/framework/views/
+storage/logs/
+bootstrap/cache/*.php

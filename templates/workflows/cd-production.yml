@@ -1,0 +1,118 @@
+name: CD — Production ({{PROD2_DOMAIN}})
+
+# Manual trigger only — never auto-deployed.
+# Run AFTER verifying the build is stable on the primary server.
+# Promotes the same GHCR image already built by the main CD run.
+#
+# image_tag: the GHCR tag to deploy, e.g. "sha-abc1234" (from the primary CD run).
+# Leave blank to deploy the "latest" tag (= last push to main).
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g. sha-abc1234). Leave blank for 'latest'."
+        required: false
+        default: 'latest'
+
+concurrency:
+  group: cd-production-2
+  cancel-in-progress: false  # never cancel a running deploy
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Deploy — no build step; promotes images already built by the main CD
+  # -----------------------------------------------------------------------
+  deploy:
+    name: Deploy to Production ({{PROD2_DOMAIN}})
+    runs-on: ubuntu-latest
+    environment:
+      name: production-2
+      url: https://{{PROD2_DOMAIN}}
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+        with:
+          host: ${{ secrets.PROD2_SSH_HOST }}
+          username: ${{ secrets.PROD2_SSH_USER }}
+          key: ${{ secrets.PROD2_SSH_KEY }}
+          envs: GHCR_TOKEN,GHCR_USER,IMAGE_TAG
+          script: |
+            set -euo pipefail
+            cd {{PROD2_DEPLOY_PATH}}
+
+            # 1. Sync compose files from repo
+            git pull --ff-only
+
+            # 2. Authenticate to GHCR
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            # 3. Pin exact image tag for this deploy
+            echo "APP_IMAGE_TAG=${IMAGE_TAG}" > .image-tag.env
+            echo "Deploying image tag: ${IMAGE_TAG}"
+
+            COMPOSE="docker compose -f docker-compose.{{PROD2_COMPOSE_FILE}}.yaml --env-file .image-tag.env"
+
+            # 4. PRE-DEPLOY BACKUP — snapshot production DB before anything touches it
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            BACKUP_FILE="{{PROD2_DEPLOY_PATH}}/backups/pre-deploy_${TIMESTAMP}.sql.gz"
+            mkdir -p "{{PROD2_DEPLOY_PATH}}/backups"
+            # MySQL backup:
+            DB_PASS=$(grep "^DB_PASSWORD=" .env | cut -d= -f2-)
+            DB_NAME=$(grep "^DB_DATABASE=" .env | cut -d= -f2-)
+            $COMPOSE exec -T {{DB_SERVICE_NAME}} \
+              mysqldump -h 127.0.0.1 -u root -p"${DB_PASS}" "${DB_NAME}" \
+              | gzip > "${BACKUP_FILE}"
+            # PostgreSQL backup (replace above):
+            # $COMPOSE exec -T {{DB_SERVICE_NAME}} \
+            #   pg_dump -U postgres "${DB_NAME}" | gzip > "${BACKUP_FILE}"
+            echo "Pre-deploy backup: ${BACKUP_FILE}"
+
+            # 5. Pull new images
+            $COMPOSE pull app nginx horizon scheduler
+
+            # 6. Ensure DB and Redis are healthy
+            $COMPOSE up -d --no-deps --wait {{DB_SERVICE_NAME}} redis
+
+            # 7. Run migrations
+            $COMPOSE run --rm --no-deps app php artisan migrate --force
+
+            # [TENANT_MIGRATE_BLOCK]
+            # $COMPOSE run --rm --no-deps app php artisan tenants:migrate --force
+
+            # 8. Seed reference data
+            $COMPOSE run --rm --no-deps app php artisan db:seed --force
+
+            # 9. Ensure storage symlink
+            $COMPOSE run --rm --no-deps app php artisan storage:link --force
+
+            # 10. Rolling restart of app
+            $COMPOSE up -d --no-deps --wait app
+
+            # 11. Rebuild Laravel caches
+            $COMPOSE exec -T app php artisan config:cache
+            $COMPOSE exec -T app php artisan route:cache
+            $COMPOSE exec -T app php artisan view:cache
+            $COMPOSE exec -T app php artisan event:cache
+
+            # 12. Graceful Horizon drain
+            $COMPOSE exec -T horizon php artisan horizon:terminate || true
+            for i in $(seq 1 30); do
+              STATUS=$($COMPOSE exec -T horizon php artisan horizon:status 2>/dev/null || echo "inactive")
+              echo "Horizon status: $STATUS (attempt $i/30)"
+              echo "$STATUS" | grep -qi "inactive\|stopped" && break
+              sleep 5
+            done
+            $COMPOSE up -d --no-deps horizon scheduler
+
+            # 13. Swap nginx
+            $COMPOSE up -d --no-deps --wait nginx
+
+            # 14. Clean up
+            docker image prune -f
+
+            echo "Production deploy complete: ${IMAGE_TAG}"

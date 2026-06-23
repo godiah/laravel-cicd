@@ -1,0 +1,299 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, 'feature/**']
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------
+  # 1. Code style — fast, no services
+  # -------------------------------------------------------
+  lint:
+    name: Code Style (Pint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "{{PHP_VERSION}}"
+          coverage: none
+
+      - uses: ramsey/composer-install@v3
+        with:
+          dependency-versions: locked
+          composer-options: --no-scripts
+
+      - run: composer lint
+
+  # -------------------------------------------------------
+  # 2. Security audit — fast, no services
+  # -------------------------------------------------------
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "{{PHP_VERSION}}"
+          coverage: none
+
+      - uses: ramsey/composer-install@v3
+        with:
+          dependency-versions: locked
+          composer-options: --no-scripts
+
+      - run: composer audit
+
+  # -------------------------------------------------------
+  # [PHPSTAN_JOB_BLOCK]
+  # Include this job only if larastan/larastan is in composer.json:
+  #
+  # analyse:
+  #   name: Static Analysis (PHPStan)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: shivammathur/setup-php@v2
+  #       with:
+  #         php-version: "{{PHP_VERSION}}"
+  #         coverage: none
+  #         extensions: pdo_{{DB_EXT}}, redis, bcmath, intl, zip, pcntl
+  #     - uses: ramsey/composer-install@v3
+  #       with:
+  #         dependency-versions: locked
+  #         composer-options: --no-scripts
+  #     - name: Bootstrap Laravel for analysis
+  #       run: |
+  #         cp .env.example .env
+  #         sed -i 's/^DB_HOST=.*/DB_HOST=127.0.0.1/' .env
+  #         sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlite/' .env
+  #         sed -i 's/^REDIS_HOST=.*/REDIS_HOST=127.0.0.1/' .env
+  #         sed -i 's/^CACHE_STORE=.*/CACHE_STORE=array/' .env
+  #         php artisan key:generate
+  #         php artisan package:discover --ansi
+  #     - name: Cache PHPStan results
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: /tmp/phpstan
+  #         key: phpstan-${{ hashFiles('composer.lock', 'phpstan.neon') }}
+  #         restore-keys: phpstan-
+  #     - run: composer analyse
+  # -------------------------------------------------------
+
+  # -------------------------------------------------------
+  # 3. Test suite — needs {{DB_SERVICE_NAME}} + Redis
+  # -------------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    services:
+      # ----- DATABASE SERVICE -----
+      # MySQL variant:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: testing
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -ppassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      # PostgreSQL variant (replace mysql block above with this):
+      # postgres:
+      #   image: postgres:16.3-alpine
+      #   env:
+      #     POSTGRES_DB: testing
+      #     POSTGRES_USER: postgres
+      #     POSTGRES_HOST_AUTH_METHOD: trust
+      #   ports:
+      #     - 5432:5432
+      #   options: >-
+      #     --health-cmd "pg_isready -U postgres -d testing"
+      #     --health-interval 10s
+      #     --health-timeout 5s
+      #     --health-retries 5
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    # Job-level env — these take precedence over .env.example values
+    # MySQL: both DB_HOST and DB_PASSWORD needed at job level
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PASSWORD: password
+      REDIS_HOST: 127.0.0.1
+    # PostgreSQL: no password (trust auth), use step-level env instead
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "{{PHP_VERSION}}"
+          extensions: pdo_mysql, redis, bcmath, intl, zip, gd, pcntl, mbstring, xml, opcache
+          # PostgreSQL: extensions: pdo_pgsql, pgsql, redis, bcmath, intl, zip, gd, pcntl, mbstring, xml, opcache
+          coverage: none
+
+      - uses: ramsey/composer-install@v3
+        with:
+          dependency-versions: locked
+
+      # [NPM_STEPS_BLOCK]
+      # Include these steps only if the project has Vite (vite.config.js exists):
+      # - name: Set up Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: 22
+      #     cache: npm
+      # - name: Install npm dependencies
+      #   run: npm ci
+      # - name: Build frontend assets
+      #   run: npm run build
+
+      - name: Configure environment
+        run: |
+          cp .env.example .env
+          # MySQL patch:
+          sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
+          sed -i 's/^DB_HOST=.*/DB_HOST=127.0.0.1/' .env
+          sed -i 's/^DB_PORT=.*/DB_PORT=3306/' .env
+          sed -i 's/^DB_DATABASE=.*/DB_DATABASE=testing/' .env
+          sed -i 's/^DB_USERNAME=.*/DB_USERNAME=root/' .env
+          sed -i 's/^DB_PASSWORD=.*/DB_PASSWORD=password/' .env
+          sed -i 's/^REDIS_HOST=.*/REDIS_HOST=127.0.0.1/' .env
+          sed -i 's/^REDIS_PORT=.*/REDIS_PORT=6379/' .env
+          # PostgreSQL patch (replace above sed block):
+          # sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=pgsql/' .env
+          # sed -i 's/^DB_HOST=.*/DB_HOST=127.0.0.1/' .env
+          # sed -i 's/^DB_PORT=.*/DB_PORT=5432/' .env
+          # sed -i 's/^DB_DATABASE=.*/DB_DATABASE=testing/' .env
+          # sed -i 's/^DB_USERNAME=.*/DB_USERNAME=postgres/' .env
+          # sed -i 's/^DB_PASSWORD=.*/DB_PASSWORD=/' .env
+          # sed -i 's/^REDIS_HOST=.*/REDIS_HOST=127.0.0.1/' .env
+
+      - name: Generate application key
+        run: php artisan key:generate
+
+      - name: Run migrations
+        run: php artisan migrate --force
+
+      # [TENANT_MIGRATE_BLOCK]
+      # Include only if stancl/tenancy is in composer.json:
+      # - name: Validate tenant migrations
+      #   run: php artisan tenants:migrate --force
+
+      - name: Run tests
+        run: composer test
+        # PostgreSQL: set env block on this step if using trust auth:
+        # env:
+        #   DB_CONNECTION: pgsql
+        #   DB_HOST: 127.0.0.1
+        #   DB_PORT: 5432
+        #   DB_DATABASE: testing
+        #   DB_USERNAME: postgres
+        #   DB_PASSWORD: ""
+
+  # -------------------------------------------------------
+  # 4. Production build check
+  #    Catches Dockerfile failures and artisan bootstrap errors
+  #    before main is ever touched. Same GHA cache scope as CD
+  #    so this primes the cache for the real build.
+  # -------------------------------------------------------
+  build-check:
+    name: Production Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build production image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: production
+          push: false
+          load: true
+          tags: {{APP_NAME_SLUG}}-build-check:ci
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      - name: Verify artisan cache commands run inside the image
+        run: |
+          APP_KEY=$(docker run --rm {{APP_NAME_SLUG}}-build-check:ci \
+            php -r "echo 'base64:'.base64_encode(random_bytes(32));")
+          docker run --rm \
+            -e APP_KEY="$APP_KEY" \
+            -e APP_ENV=production \
+            -e APP_DEBUG=false \
+            -e DB_CONNECTION={{DB_TYPE}} \
+            -e DB_HOST=127.0.0.1 \
+            -e DB_PORT={{DB_PORT}} \
+            -e DB_DATABASE={{APP_NAME_SLUG}} \
+            -e DB_USERNAME={{DB_DEFAULT_USER}} \
+            -e DB_PASSWORD=secret \
+            -e REDIS_HOST=127.0.0.1 \
+            -e CACHE_STORE=redis \
+            -e SESSION_DRIVER=redis \
+            -e QUEUE_CONNECTION=redis \
+            {{APP_NAME_SLUG}}-build-check:ci \
+            sh -c "
+              php artisan config:cache &&
+              php artisan route:cache &&
+              php artisan view:cache &&
+              php artisan event:cache
+            "
+
+  # -------------------------------------------------------
+  # 5. Auto-merge to main after all gates pass
+  #    Only fires on direct pushes (not PRs) to avoid a
+  #    merge loop where the merge to main triggers another CI run.
+  # -------------------------------------------------------
+  auto-merge:
+    name: Auto-merge to main
+    needs: [lint, audit, test, build-check]
+    # If PHPStan is enabled: needs: [lint, audit, analyse, test, build-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: |
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/feature/'))
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Merge into main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git merge --no-ff origin/${{ github.ref_name }} \
+            -m "chore: auto-merge ${{ github.ref_name }} into main after CI passed"
+          git push origin main

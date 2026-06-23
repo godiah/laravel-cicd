@@ -1,0 +1,202 @@
+name: CD
+
+# Runs on every push to main (auto-triggered after CI auto-merges a branch)
+# or manually for hotfixes / rollbacks.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false  # never cancel a running deploy
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1 — Build both Docker images and push to GHCR
+  # -----------------------------------------------------------------------
+  build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta-app.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- App image (production stage) ----
+      - name: Extract metadata — app image
+        id: meta-app
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: production
+          push: true
+          tags: ${{ steps.meta-app.outputs.tags }}
+          labels: ${{ steps.meta-app.outputs.labels }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      # ---- Nginx image (web stage) ----
+      - name: Extract metadata — nginx image
+        id: meta-nginx
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,format=short,prefix=nginx-sha-
+            type=raw,value=nginx-latest,enable={{is_default_branch}}
+
+      - name: Build and push nginx image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: web
+          push: true
+          tags: ${{ steps.meta-nginx.outputs.tags }}
+          labels: ${{ steps.meta-nginx.outputs.labels }}
+          cache-from: type=gha,scope=nginx
+          cache-to: type=gha,mode=max,scope=nginx
+
+  # -----------------------------------------------------------------------
+  # Job 2 — Deploy to production VPS via SSH
+  #
+  # Deployment order:
+  #   1. Sync compose files from repo (git pull)
+  #   2. GHCR login
+  #   3. Pin exact image tag (prevents race conditions)
+  #   4. Pull new images (old containers still serving traffic)
+  #   5. Ensure DB + Redis are healthy
+  #   6. Run migrations (must be additive/backwards-compatible with running code)
+  #   7. [Optional] Run seeders (updateOrCreate/firstOrCreate patterns only)
+  #   8. Ensure storage symlink
+  #   9. Rolling restart of app — blocks until healthcheck passes
+  #  10. Rebuild Laravel caches inside new container
+  #  11. Graceful Horizon drain + restart
+  #  12. Restart nginx with new image
+  #  13. Prune old images
+  # -----------------------------------------------------------------------
+  deploy:
+    name: Deploy to Production ({{PROD_DOMAIN}})
+    needs: build
+    # [PROD_READY_GUARD]: Uncomment the line below to gate deploy until server is provisioned:
+    # if: vars.PROD_READY == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://{{PROD_DOMAIN}}
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          SHORT_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          envs: GHCR_TOKEN,GHCR_USER,SHORT_SHA
+          script: |
+            set -euo pipefail
+            cd {{DEPLOY_PATH}}
+
+            # 1. Sync compose files and config from repo
+            git pull --ff-only
+
+            # 2. Authenticate to GHCR so docker can pull private images
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            # 3. Pin the exact image tag — prevents race where a second deploy
+            #    overwrites the tag while services are still restarting
+            echo "APP_IMAGE_TAG=sha-${SHORT_SHA:0:7}" > .image-tag.env
+
+            COMPOSE="docker compose -f docker-compose.prod.yaml --env-file .image-tag.env"
+
+            # 4. Pull new images (old containers still serving traffic at this point)
+            $COMPOSE pull app nginx horizon scheduler
+
+            # 5. Ensure DB and Redis are running and healthy before migrations
+            #    Safe no-op if already healthy; needed when compose config changes restart them
+            $COMPOSE up -d --no-deps --wait {{DB_SERVICE_NAME}} redis
+
+            # 6. Run migrations (old code still serving — migrations must be additive)
+            # [SCHEMA_OWNER_BLOCK]: Remove migrate step if this app does NOT own the schema
+            $COMPOSE run --rm --no-deps app php artisan migrate --force
+
+            # [TENANT_MIGRATE_BLOCK]: Include if stancl/tenancy is present
+            # $COMPOSE run --rm --no-deps app php artisan tenants:migrate --force
+
+            # 7. Seed reference data — only safe if all seeders use updateOrCreate/firstOrCreate
+            # [SEED_BLOCK]: Uncomment if project has idempotent seeders
+            # $COMPOSE run --rm --no-deps app php artisan db:seed --force
+
+            # 8. Ensure storage symlink (survives volume remounts)
+            $COMPOSE run --rm --no-deps app php artisan storage:link --force
+
+            # 9. Rolling restart of app — --wait blocks until healthcheck passes
+            #    Traffic is only cut over once the new container is healthy
+            $COMPOSE up -d --no-deps --wait app
+
+            # 10. Rebuild Laravel caches AFTER the new container is healthy
+            #     New code builds its own cache rather than inheriting stale cache
+            $COMPOSE exec -T app php artisan config:cache
+            $COMPOSE exec -T app php artisan route:cache
+            $COMPOSE exec -T app php artisan view:cache
+            $COMPOSE exec -T app php artisan event:cache
+
+            # [SWAGGER_BLOCK]: Include if darkaonline/l5-swagger is present
+            # $COMPOSE exec -T app php artisan l5-swagger:generate
+
+            # 11. Graceful Horizon drain — signals workers to finish current jobs
+            #     The horizon service shares the app image, so terminate before restart
+            # [HORIZON_BLOCK]: Include if laravel/horizon is present
+            $COMPOSE exec -T horizon php artisan horizon:terminate || true
+
+            echo "Waiting for Horizon to drain in-flight jobs..."
+            for i in $(seq 1 30); do
+              STATUS=$(docker compose -f docker-compose.prod.yaml \
+                exec -T horizon php artisan horizon:status 2>/dev/null || echo "inactive")
+              echo "Horizon status: $STATUS (attempt $i/30)"
+              echo "$STATUS" | grep -qi "inactive\|stopped" && break
+              sleep 5
+            done
+
+            $COMPOSE up -d --no-deps horizon scheduler
+            # [/HORIZON_BLOCK]
+
+            # Without Horizon — simple queue worker restart:
+            # [QUEUE_RESTART_BLOCK]: Use if project has queue:work without Horizon
+            # $COMPOSE exec -T app php artisan queue:restart
+            # [/QUEUE_RESTART_BLOCK]
+
+            # 12. Swap nginx to the new image (zero-downtime: nginx restart is instant)
+            $COMPOSE up -d --no-deps --wait nginx
+
+            # 13. Reclaim disk — remove dangling images from previous deploys
+            docker image prune -f
+
+            echo "Deploy complete: sha-${SHORT_SHA:0:7}"
