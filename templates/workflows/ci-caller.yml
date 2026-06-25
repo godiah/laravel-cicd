@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   pipeline:
-    uses: godiah/laravel-cicd/.github/workflows/laravel-ci.yml@main
+    uses: godiah/laravel-cicd/.github/workflows/laravel-ci.yml@v1.0.0
     with:
       php-version: '{{PHP_VERSION}}'
       db-type: '{{DB_TYPE}}'

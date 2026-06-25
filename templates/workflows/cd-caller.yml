@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   pipeline:
-    uses: godiah/laravel-cicd/.github/workflows/laravel-cd.yml@main
+    uses: godiah/laravel-cicd/.github/workflows/laravel-cd.yml@v1.0.0
     with:
       github-repo-owner: '{{GITHUB_REPO_OWNER}}'
       app-name-slug: '{{APP_NAME_SLUG}}'
