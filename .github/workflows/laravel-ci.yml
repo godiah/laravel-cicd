@@ -46,6 +46,9 @@ jobs:
           php-version: ${{ inputs.php-version }}
           coverage: none
 
+      - name: Configure Composer GitHub auth
+        run: composer config --global github-oauth.github.com "${{ secrets.GH_PAT }}"
+
       - uses: ramsey/composer-install@v3
         with:
           dependency-versions: locked
@@ -66,6 +69,9 @@ jobs:
         with:
           php-version: ${{ inputs.php-version }}
           coverage: none
+
+      - name: Configure Composer GitHub auth
+        run: composer config --global github-oauth.github.com "${{ secrets.GH_PAT }}"
 
       - uses: ramsey/composer-install@v3
         with:
@@ -89,6 +95,9 @@ jobs:
           php-version: ${{ inputs.php-version }}
           coverage: none
           extensions: pdo_mysql, pdo_pgsql, redis, bcmath, intl, zip, pcntl
+
+      - name: Configure Composer GitHub auth
+        run: composer config --global github-oauth.github.com "${{ secrets.GH_PAT }}"
 
       - uses: ramsey/composer-install@v3
         with:
@@ -159,6 +168,9 @@ jobs:
           php-version: ${{ inputs.php-version }}
           extensions: pdo_mysql, redis, bcmath, intl, zip, gd, pcntl, mbstring, xml, opcache
           coverage: none
+
+      - name: Configure Composer GitHub auth
+        run: composer config --global github-oauth.github.com "${{ secrets.GH_PAT }}"
 
       - uses: ramsey/composer-install@v3
         with:
@@ -246,6 +258,9 @@ jobs:
           extensions: pdo_pgsql, pgsql, redis, bcmath, intl, zip, gd, pcntl, mbstring, xml, opcache
           coverage: none
 
+      - name: Configure Composer GitHub auth
+        run: composer config --global github-oauth.github.com "${{ secrets.GH_PAT }}"
+
       - uses: ramsey/composer-install@v3
         with:
           dependency-versions: locked
@@ -331,6 +346,8 @@ jobs:
           tags: ${{ inputs.app-name-slug }}-build-check:ci
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
+          secrets: |
+            github_token=${{ secrets.GH_PAT }}
 
       - name: Verify artisan cache commands run inside the image
         run: |
