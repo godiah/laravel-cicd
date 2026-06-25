@@ -12,6 +12,8 @@ concurrency:
 
 jobs:
   pipeline:
+    permissions:
+      contents: write
     uses: godiah/laravel-cicd/.github/workflows/laravel-ci.yml@v1.0.0
     with:
       php-version: '{{PHP_VERSION}}'
