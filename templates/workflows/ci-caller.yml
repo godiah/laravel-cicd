@@ -14,7 +14,7 @@ jobs:
   pipeline:
     permissions:
       contents: write
-    uses: godiah/laravel-cicd/.github/workflows/laravel-ci.yml@v1.0.0
+    uses: godiah/laravel-cicd/.github/workflows/laravel-ci.yml@v1.0.1
     with:
       php-version: '{{PHP_VERSION}}'
       db-type: '{{DB_TYPE}}'
