@@ -70,6 +70,16 @@ RUN composer dump-autoload --optimize --no-dev --no-scripts \
 # Note: Alpine sh does not support brace expansion — list paths explicitly
 RUN rm -rf tests/ .github/ docker/
 
+# ---- Storage structure ----
+# Git does not track empty directories — ensure Laravel's required paths exist.
+RUN mkdir -p \
+        storage/framework/views \
+        storage/framework/cache/data \
+        storage/framework/sessions \
+        storage/framework/testing \
+        storage/logs \
+        bootstrap/cache
+
 # ---- Permissions ----
 RUN chown -R www-data:www-data \
         storage/ \
