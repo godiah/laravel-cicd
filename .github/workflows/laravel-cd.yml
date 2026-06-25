@@ -51,11 +51,11 @@ on:
       GHCR_PULL_TOKEN:
         required: true
       PROD_SSH_HOST:
-        required: true
+        required: false  # only needed when prod-ready: true
       PROD_SSH_USER:
-        required: true
+        required: false  # only needed when prod-ready: true
       PROD_SSH_KEY:
-        required: true
+        required: false  # only needed when prod-ready: true
 
 jobs:
   # -----------------------------------------------------------------------
