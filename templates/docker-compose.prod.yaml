@@ -27,6 +27,11 @@ services:
       # Loopback-only — host nginx/Caddy handles TLS and proxies here.
       # Change the host port if another app already uses {{PROD_PORT}} on this server.
       - '127.0.0.1:{{PROD_PORT}}:80'
+    volumes:
+      # Needed so nginx can resolve public/storage (symlinked to
+      # storage/app/public) and actually serve locally-uploaded files —
+      # without this it 403s on any file uploaded after the image was built.
+      - 'storage:/var/www/html/storage'
     depends_on:
       app:
         condition: service_healthy
