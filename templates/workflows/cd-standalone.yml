@@ -162,7 +162,13 @@ jobs:
             $COMPOSE up -d --no-deps --wait app
 
             # 10. Rebuild Laravel caches AFTER the new container is healthy
-            #     New code builds its own cache rather than inheriting stale cache
+            #     package:discover first: bootstrap/cache/packages.php lives on a
+            #     volume that persists across deploys, and Laravel only regenerates
+            #     it if the file is missing entirely — it never detects staleness.
+            #     Without this, a deploy that adds a new package keeps serving the
+            #     old package manifest, so that package's commands/providers never
+            #     get registered despite the new code being right there in the image.
+            $COMPOSE exec -T app php artisan package:discover --ansi
             $COMPOSE exec -T app php artisan config:cache
             $COMPOSE exec -T app php artisan route:cache
             $COMPOSE exec -T app php artisan view:cache
