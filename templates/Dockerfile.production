@@ -66,12 +66,11 @@ COPY . .
 RUN composer dump-autoload --optimize --no-dev --no-scripts \
     && rm /usr/local/bin/composer
 
-# Remove dev/test directories not needed at runtime
-# Note: Alpine sh does not support brace expansion — list paths explicitly
-RUN rm -rf tests/ .github/ docker/
-
 # ---- Storage structure ----
 # Git does not track empty directories — ensure Laravel's required paths exist.
+# Must exist before any `artisan` call below — bootstrap/cache is where the
+# framework writes its compiled service-container cache, even for a command
+# as simple as storage:link.
 RUN mkdir -p \
         storage/framework/views \
         storage/framework/cache/data \
@@ -79,6 +78,19 @@ RUN mkdir -p \
         storage/framework/testing \
         storage/logs \
         bootstrap/cache
+
+# public/storage -> storage/app/public, baked in at build time. The Stage 4
+# nginx image copies public/ as a static snapshot with no entrypoint script
+# of its own, so this must exist before that COPY — `docker build` preserves
+# symlinks across COPY --from, and at runtime both the app and nginx
+# containers mount the same shared `storage` named volume at this exact
+# path, so the symlink resolves correctly in both. Without this, every
+# uploaded/seeded public file 404s through nginx even though it's on disk.
+RUN php artisan storage:link
+
+# Remove dev/test directories not needed at runtime
+# Note: Alpine sh does not support brace expansion — list paths explicitly
+RUN rm -rf tests/ .github/ docker/
 
 # ---- Permissions ----
 RUN chown -R www-data:www-data \

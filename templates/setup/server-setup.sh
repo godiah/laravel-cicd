@@ -62,16 +62,16 @@ else
 fi
 
 # ---------------------------------------------------------------
-# 3. Create deploy directory structure
+# 3. Create deploy directory (bare, no subdirs yet — git clone below
+#    requires an empty target; backups/ is created after, in step 4)
 # ---------------------------------------------------------------
 log "Creating deploy directory: ${DEPLOY_DIR}"
-sudo mkdir -p "${DEPLOY_DIR}/backups"
+sudo mkdir -p "${DEPLOY_DIR}"
 sudo chown -R "$(id -un):$(id -gn)" "${DEPLOY_DIR}"
 chmod 750 "${DEPLOY_DIR}"
-chmod 700 "${DEPLOY_DIR}/backups"
 
 # ---------------------------------------------------------------
-# 4. Clone the repository
+# 4. Clone the repository, then create backups/
 # ---------------------------------------------------------------
 if [ -d "${DEPLOY_DIR}/.git" ]; then
   log "Repo already cloned, pulling latest..."
@@ -81,8 +81,19 @@ else
   # Requires the deploy user's SSH key to have read access to the repo.
   # Alternatively use HTTPS with a PAT:
   #   git clone https://<PAT>@github.com/{{GITHUB_REPO_OWNER}}/{{APP_NAME_SLUG}}.git "${DEPLOY_DIR}"
-  git clone "${REPO}" "${DEPLOY_DIR}"
+  #
+  # Clone into a temp dir first, then copy contents in — DEPLOY_DIR may
+  # already hold a manually-placed .env (this script's own documented
+  # prerequisite), and `git clone` refuses a non-empty target. .env is
+  # gitignored so it's never part of the clone and never gets clobbered.
+  TMP_CLONE=$(mktemp -d)
+  git clone "${REPO}" "${TMP_CLONE}"
+  cp -a "${TMP_CLONE}/." "${DEPLOY_DIR}/"
+  rm -rf "${TMP_CLONE}"
 fi
+
+mkdir -p "${DEPLOY_DIR}/backups"
+chmod 700 "${DEPLOY_DIR}/backups"
 
 # ---------------------------------------------------------------
 # 5. Verify .env file exists
@@ -202,7 +213,12 @@ else
   sudo apt-get install -y certbot python3-certbot-nginx
   SECURITY_EMAIL=$(grep '^SECURITY_EMAIL=' "${DEPLOY_DIR}/.env" | cut -d= -f2- | tr -d '"')
   CERTBOT_EMAIL="${SECURITY_EMAIL:-admin@{{PROD_DOMAIN}}}"
-  sudo certbot certonly --nginx -d {{PROD_DOMAIN}} --non-interactive --agree-tos \
+  # Full nginx-plugin mode (not `certonly`) — Certbot edits
+  # ${NGINX_AVAILABLE} in place to add the 443 server block with correct
+  # cert paths and the 80->443 redirect. nginx-host.conf ships HTTP-only
+  # for exactly this reason; a pre-written 443 block would fail nginx -t
+  # before Certbot ever got a chance to run.
+  sudo certbot --nginx -d {{PROD_DOMAIN}} --redirect --non-interactive --agree-tos \
     -m "${CERTBOT_EMAIL}" \
     || warn "Certbot failed — ensure DNS resolves to this server first"
   sudo nginx -t && sudo systemctl reload nginx
