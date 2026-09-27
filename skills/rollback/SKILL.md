@@ -1,17 +1,27 @@
-# Rollback Skill
+---
+name: rollback
+description: Use this skill when the user says "rollback", "roll back", "revert deploy", "go back to previous version", or "undo deploy" for a project. Detects the project's GHCR image name, deploy path, and Horizon usage from its own docker-compose.prod.yaml and CD workflow, lets the user pick a target image tag, confirms explicitly, then executes the rollback over SSH and verifies the result.
+---
 
-## TRIGGER
-Invoke this skill when the user says "rollback", "roll back", "revert deploy", "go back to previous version", or "undo deploy" for a project.
+# Rollback
 
-## WHAT THIS SKILL DOES
-Rolls back a production deployment to a specific previous image tag by:
-1. Detecting the project's image name and deploy path
-2. Letting the user pick a target tag (or auto-detecting recent tags on the server)
-3. Executing the rollback via SSH
+## Overview
+
+Rolls back a production deployment to a specific previous image tag: detect project info → pick a target tag → confirm → execute over SSH → verify.
+
+## When to use this skill
+
+- "rollback" / "roll back" / "revert deploy" / "go back to previous version" / "undo deploy" for a project
+
+## Do not use this skill when
+
+- The need is to ship a fix forward, not go back to an old image — that's a normal push-to-main CD deploy, not a rollback.
+- The production schema is now incompatible with the older code and the real fix is a forward-compatible migration — rolling back the image alone won't resolve a schema mismatch. Say so explicitly instead of running the rollback anyway.
+- No usable previous tag actually exists on GHCR (images past the 90-day retention window) — surface that limitation before attempting anything.
 
 ---
 
-## STEP 1 — DETECT PROJECT INFO
+## Step 1 — Detect project info
 
 Read these files to extract rollback parameters:
 
@@ -33,7 +43,7 @@ If any values can't be detected from files, ask the user.
 
 ---
 
-## STEP 2 — DETERMINE TARGET TAG
+## Step 2 — Determine target tag
 
 Ask the user:
 ```
@@ -60,7 +70,7 @@ Use the tag the user provides.
 
 ---
 
-## STEP 3 — CONFIRM BEFORE EXECUTING
+## Step 3 — Confirm before executing
 
 Before running the rollback, confirm with the user:
 ```
@@ -82,7 +92,7 @@ Proceed? (yes/no)
 
 ---
 
-## STEP 4 — EXECUTE THE ROLLBACK
+## Step 4 — Execute the rollback
 
 Use the `rollback.sh` script if it exists on the server:
 ```bash
@@ -126,7 +136,7 @@ ROLLBACK
 
 ---
 
-## STEP 5 — VERIFY
+## Step 5 — Verify
 
 After the rollback completes, verify:
 ```bash
@@ -143,7 +153,7 @@ ssh {{PROD_SSH_USER}}@{{PROD_SSH_HOST}} \
 
 ---
 
-## EDGE CASES
+## Edge cases
 
 **"I don't have SSH access from this machine"**
 Generate the rollback command for the user to run directly on the server:
@@ -165,3 +175,20 @@ b) Write a forward-compatible fix and deploy that instead
 If the rollback breaks things, the last known-good state is still in `.image-tag.env`.
 The user can also run: `docker compose -f docker-compose.prod.yaml up -d` to restart
 whatever is currently configured.
+
+---
+
+## Destructive operations
+
+This entire skill is a production-affecting operation by nature. Beyond the explicit Step 3 confirmation gate:
+
+- **Never skip Step 3's confirmation**, even if the user's initial request already named a specific tag — restate what will happen and get an explicit yes before touching production.
+- **Never run `migrate:rollback` on your own initiative** to "fix" a schema mismatch surfaced during rollback — that's a separate, riskier decision the user must make explicitly (see Edge cases above).
+- **SSH commands here execute directly against production with no staging tier** — treat every command in Step 4 as live the first time it's run, not as something to iterate on against the real server.
+
+---
+
+## Related skills
+
+- Generates the `docker-compose.prod.yaml` / `cd.yml` this skill reads: `cicd-setup`
+- End-to-end new project scaffold: `new-project`

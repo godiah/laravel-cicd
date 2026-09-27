@@ -27,7 +27,12 @@ mkdir -p "${TEMPLATES_DIR}/docker/nginx/conf.d"
 mkdir -p "${TEMPLATES_DIR}/setup"
 
 # ---------------------------------------------------------------
-# 2. Install skill files
+# 2. Install skill directories
+#
+# Claude Code only discovers skills laid out as
+# ~/.claude/skills/<name>/SKILL.md with YAML frontmatter — a flat
+# ~/.claude/skills/<name>.md file is silently ignored. Versions of
+# this repo before 2026-09 installed flat files; clean those up too.
 # ---------------------------------------------------------------
 install_file() {
   local src="$1"
@@ -39,10 +44,23 @@ install_file() {
   ok "$(basename "${src}") → ${dest}"
 }
 
+install_skill_dir() {
+  local name="$1"
+  local dest_dir="${SKILLS_DIR}/${name}"
+  mkdir -p "${dest_dir}"
+  install_file "${REPO_DIR}/skills/${name}/SKILL.md" "${dest_dir}/SKILL.md"
+
+  # Remove stale pre-2026-09 flat-file install + its backup, if present.
+  if [ -f "${SKILLS_DIR}/${name}.md" ]; then
+    rm -f "${SKILLS_DIR}/${name}.md" "${SKILLS_DIR}/${name}.md.bak"
+    ok "removed stale flat-file skill ${SKILLS_DIR}/${name}.md (superseded by ${name}/SKILL.md)"
+  fi
+}
+
 log "Installing skills..."
-install_file "${REPO_DIR}/skills/cicd-setup.md"   "${SKILLS_DIR}/cicd-setup.md"
-install_file "${REPO_DIR}/skills/new-project.md"  "${SKILLS_DIR}/new-project.md"
-install_file "${REPO_DIR}/skills/rollback.md"      "${SKILLS_DIR}/rollback.md"
+install_skill_dir "cicd-setup"
+install_skill_dir "new-project"
+install_skill_dir "rollback"
 
 # ---------------------------------------------------------------
 # 3. Install template files

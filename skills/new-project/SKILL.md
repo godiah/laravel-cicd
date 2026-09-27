@@ -1,19 +1,36 @@
-# New Laravel Project Skill
+---
+name: new-project
+description: Use this skill when the user asks to create a new Laravel project, scaffold a new project, start a new Laravel app, or just says "new project". Sets up a fully-configured greenfield Laravel project end-to-end — composer scaffold, git branches, CLAUDE.md, .env.production.example, optional GitHub repo creation — then immediately invokes the cicd-setup skill so CI/CD is wired from day one.
+---
 
-## TRIGGER
-Invoke this skill when the user asks to "create a new Laravel project", "scaffold a new project", "start a new Laravel app", or "new project". This sets up a fully-configured Laravel project with all conventions wired from day one.
+# New Laravel Project
 
-## WHAT THIS SKILL PRODUCES
+## Overview
+
+Scaffolds a brand-new Laravel project with every convention this workflow relies on wired in from the first commit, then hands off to `cicd-setup` so the project never goes through a period of existing without CI/CD.
+
+## When to use this skill
+
+- "create a new Laravel project" / "scaffold a new project" / "start a new Laravel app" / "new project"
+
+## Do not use this skill when
+
+- The project already exists — this is for greenfield scaffolds only. To add CI/CD to an existing project, use `cicd-setup` directly instead.
+- The target directory already has files in it — `composer create-project` will silently merge into whatever's there rather than failing loudly. Confirm the directory is genuinely empty/new, or pick a different path, before proceeding.
+- The user only wants the CI/CD pipeline, not a new Laravel install — use `cicd-setup` alone.
+
+## What this skill produces
+
 - A new Laravel project with `composer create-project`
 - Git initialized with `main` + `develop` branches
-- CLAUDE.md with project context
+- `CLAUDE.md` with project context
 - `.env.production.example` ready for server setup
 - GitHub repo created (optional)
-- CI/CD fully configured via `/cicd-setup`
+- CI/CD fully configured via `cicd-setup`
 
 ---
 
-## STEP 1 — GATHER PROJECT DETAILS
+## Step 1 — Gather project details
 
 Ask the user these questions upfront (all in one message):
 
@@ -30,7 +47,7 @@ Ask the user these questions upfront (all in one message):
 
 ---
 
-## STEP 2 — CREATE THE LARAVEL PROJECT
+## Step 2 — Create the Laravel project
 
 ```bash
 cd {{PARENT_DIR}}
@@ -45,7 +62,7 @@ composer create-project laravel/laravel {{PROJECT_NAME}} --prefer-dist --ignore-
 
 ---
 
-## STEP 3 — INITIAL CONFIGURATION
+## Step 3 — Initial configuration
 
 ### Install Laravel Pint (if not already included)
 ```bash
@@ -81,7 +98,7 @@ Ensure these are present (Laravel's default covers most, verify):
 
 ---
 
-## STEP 4 — CREATE CLAUDE.md
+## Step 4 — Create CLAUDE.md
 
 Create `CLAUDE.md` in the project root. Keep it minimal — the developer will expand it:
 
@@ -109,7 +126,7 @@ Create `CLAUDE.md` in the project root. Keep it minimal — the developer will e
 
 ---
 
-## STEP 5 — CREATE `.env.production.example`
+## Step 5 — Create `.env.production.example`
 
 Copy `.env.example` to `.env.production.example` and sanitize it:
 - Replace all real values with safe placeholders
@@ -121,7 +138,7 @@ Copy `.env.example` to `.env.production.example` and sanitize it:
 
 ---
 
-## STEP 6 — INITIALIZE GIT
+## Step 6 — Initialize git
 
 ```bash
 git init
@@ -135,7 +152,7 @@ The project should start on `develop` so the first real work push triggers CI.
 
 ---
 
-## STEP 7 — CREATE GITHUB REPO (if requested)
+## Step 7 — Create GitHub repo (if requested)
 
 ```bash
 gh repo create godiah/{{PROJECT_NAME}} --private --source . --remote origin
@@ -147,14 +164,11 @@ For public repos replace `--private` with `--public`.
 
 ---
 
-## STEP 8 — RUN /cicd-setup
+## Step 8 — Invoke cicd-setup
 
-After the project and repo are created, immediately run:
-```
-/cicd-setup
-```
+After the project and repo are created, immediately invoke the `cicd-setup` skill.
 
-The skill will detect the project properties from what was just created (composer.json, .env.example, package.json) and generate all CI/CD files with minimal questions since we already know PHP version, DB type, Horizon, Vite.
+It will detect the project properties from what was just created (composer.json, .env.example, package.json) and generate all CI/CD files with minimal questions since PHP version, DB type, Horizon, and Vite are already known.
 
 Pass the already-gathered information directly to skip re-detection:
 - PHP version, DB type, has-Horizon, has-Vite are known
@@ -162,7 +176,7 @@ Pass the already-gathered information directly to skip re-detection:
 
 ---
 
-## STEP 9 — SUMMARY TO USER
+## Step 9 — Summary to user
 
 After everything is set up, give the user:
 
@@ -184,3 +198,20 @@ After everything is set up, give the user:
   □ Provision server and run: bash .github/setup/server-setup.sh
   □ Set PROD_READY=true in GitHub Variables once server is ready
 ```
+
+---
+
+## Destructive operations
+
+State exactly what will happen and get explicit confirmation before any of the following:
+
+- **Creating the GitHub repo as public** — once cloned or indexed elsewhere this is effectively irreversible. Confirm private vs. public explicitly; default to private if the user doesn't say.
+- **Running `composer create-project` into a non-empty directory** — it merges silently into existing files instead of failing. Confirm the target directory is genuinely new first.
+- **The initial `git push -u origin main`/`develop`** assumes a brand-new, empty remote. If `gh repo create` reports the repo already exists, stop and ask rather than pushing into it.
+
+---
+
+## Related skills
+
+- Generates the CI/CD pipeline this skill invokes as its final step: `cicd-setup`
+- Roll back a bad production deployment: `rollback`

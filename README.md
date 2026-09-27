@@ -8,7 +8,9 @@ Built from patterns extracted across 6 production Laravel projects.
 
 | File | Purpose |
 |------|---------|
-| `skill.md` | The `/cicd-setup` Claude Code skill — installed to `~/.claude/skills/` |
+| `skills/cicd-setup/SKILL.md` | The `cicd-setup` Claude Code skill — installed to `~/.claude/skills/cicd-setup/SKILL.md` |
+| `skills/new-project/SKILL.md` | The `new-project` Claude Code skill — installed to `~/.claude/skills/new-project/SKILL.md` |
+| `skills/rollback/SKILL.md` | The `rollback` Claude Code skill — installed to `~/.claude/skills/rollback/SKILL.md` |
 | `templates/workflows/ci.yml` | GitHub Actions CI: lint, audit, test, build-check, auto-merge |
 | `templates/workflows/cd.yml` | GitHub Actions CD: GHCR push + SSH deploy |
 | `templates/workflows/cd-production.yml` | Optional manual second-server promotion |
@@ -32,7 +34,7 @@ git clone git@github.com:godiah/laravel-cicd.git ~/laravel-cicd
 bash ~/laravel-cicd/install.sh
 ```
 
-This installs the skill to `~/.claude/skills/cicd-setup.md` and all templates to `~/.claude/cicd-templates/`.
+This installs each skill to `~/.claude/skills/<name>/SKILL.md` (the directory + frontmatter form Claude Code's skill discovery actually requires — a flat `<name>.md` file is silently ignored) and all templates to `~/.claude/cicd-templates/`.
 
 ## Updating
 

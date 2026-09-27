@@ -1,10 +1,30 @@
-# CI/CD Setup Skill
+---
+name: cicd-setup
+description: Use this skill when the user asks to "set up CI/CD", "add CI/CD", "create pipelines", "configure GitHub Actions", or "deploy this to production" for a Laravel project on a Docker/VPS stack. Full-project operation — detects PHP version, database, queue driver, frontend build tool, and multi-tenancy from the project's own files, then generates GitHub Actions workflows, a production Dockerfile, Compose stack, nginx/PHP config, and server-provisioning scripts adapted to what it found. Read the project before generating anything.
+---
 
-## TRIGGER
-Invoke this skill when the user asks to "set up CI/CD", "add CI/CD", "create pipelines", or "configure GitHub Actions" for a Laravel project. This is a full-project operation — read the project before generating anything.
+# CI/CD Setup
 
-## WHAT THIS SKILL PRODUCES
-For any Laravel PHP project on a VPS with Docker, this skill generates:
+## Overview
+
+For any Laravel PHP project on a VPS with Docker, this skill generates a full CI/CD pipeline: GitHub Actions workflows (lint → test → build → deploy), a production multi-stage Dockerfile, a Compose stack with healthchecks, nginx/PHP config, and server-provisioning scripts — all adapted to the specific project's stack rather than a generic template dump.
+
+Templates live at: `~/.claude/cicd-templates/`
+
+## When to use this skill
+
+- "set up CI/CD" / "add CI/CD" / "create pipelines" / "configure GitHub Actions" for a Laravel project
+- "deploy this to production" when no pipeline exists yet
+- Immediately after `new-project` finishes scaffolding a new Laravel app
+
+## Do not use this skill when
+
+- CI/CD already exists and the ask is a targeted change (e.g. "add a PHPStan job", "bump the PHP version") — edit the existing workflow/Dockerfile directly. Regenerating from templates overwrites manual edits already made on top of them.
+- The project isn't Laravel, or isn't deploying to a Docker container on a VPS (serverless, shared hosting, Vercel, etc.) — every template here assumes Docker Compose + GHCR + SSH deploy.
+- The user is asking to actually *run* a deploy, a migration, or a rollback — that's execution, not setup. Use `rollback` for rollbacks; run deploy/migrate commands directly, this skill only generates files.
+
+## What this skill produces
+
 - `.github/workflows/ci.yml` — lint, audit, test, build-check, auto-merge
 - `.github/workflows/cd.yml` — Docker build → GHCR push → SSH deploy
 - `.github/workflows/cd-production.yml` — optional manual second-server promotion
@@ -18,11 +38,9 @@ For any Laravel PHP project on a VPS with Docker, this skill generates:
 - `.github/secrets-reference.md`
 - `.github/branch-protection.md`
 
-Templates live at: `~/.claude/cicd-templates/`
-
 ---
 
-## STEP 1 — DETECT PROJECT PROPERTIES
+## Step 1 — Detect project properties
 
 Before writing a single file, read these sources and build a properties map:
 
@@ -34,7 +52,7 @@ Before writing a single file, read these sources and build a properties map:
 - `HAS_SWAGGER` — `true` if `darkaonline/l5-swagger` is present
 - `DB_SEED_COMMAND` — check if `db:seed` is used (safe if seeders use updateOrCreate/firstOrCreate)
 
-### From `package.json` or vite.config.js:
+### From `package.json` or `vite.config.js`:
 - `HAS_VITE` — `true` if `vite.config.js` exists OR `vite` is in devDependencies
 
 ### From `.env.example`:
@@ -54,7 +72,7 @@ Before writing a single file, read these sources and build a properties map:
 
 ---
 
-## STEP 2 — DERIVE COMPUTED VALUES
+## Step 2 — Derive computed values
 
 ```
 APP_IMAGE    = ghcr.io/{{GITHUB_REPO_OWNER}}/{{APP_NAME_SLUG}}
@@ -107,9 +125,9 @@ else:
 
 ---
 
-## STEP 3 — GENERATE FILES
+## Step 3 — Generate files
 
-Use the templates in `~/.claude/cicd-templates/` as the starting point. Copy each template and substitute all `{{PLACEHOLDER}}` values. Do NOT leave any `{{PLACEHOLDER}}` in the final files.
+Use the templates in `~/.claude/cicd-templates/` as the starting point. Copy each template and substitute all `{{PLACEHOLDER}}` values. Do NOT leave any `{{PLACEHOLDER}}` in the final files — Step 3.5 checks for this.
 
 **Preferred approach — reusable workflows (thin callers):**
 Use `ci-caller.yml` and `cd-caller.yml` templates. These delegate all logic to the central reusable workflows in `godiah/laravel-cicd`. When the central workflows improve, all projects get the update automatically. The caller files are tiny (~15–20 lines each).
@@ -163,23 +181,7 @@ Key substitutions:
 - `{{PHPSTAN_JOB}}` — full analyse job block if HAS_PHPSTAN, else empty
 - `{{CI_NEEDS}}` — `[lint, audit, test, build-check]` or `[test, build-check]`
 
-### 3. `.github/workflows/cd.yml`
-Use `~/.claude/cicd-templates/workflows/cd.yml` as base.
-
-Key substitutions:
-- `{{APP_IMAGE}}` — GHCR app image URL
-- `{{NGINX_IMAGE}}` — GHCR nginx image URL
-- `{{PROD_DOMAIN}}` — production URL
-- `{{DEPLOY_PATH}}` — `/opt/{{APP_NAME_SLUG}}`
-- `{{EXTRA_MIGRATE_CD}}` — tenant migrate or empty
-- `{{HORIZON_DRAIN_BLOCK}}` — drain + restart block
-- `{{PROD_READY_CONDITION}}` — `if: vars.PROD_READY == 'true'` or empty
-- `{{DOCKERFILE_NAME}}` — `Dockerfile.production` or `Dockerfile`
-
-### 4. `.github/workflows/cd-production.yml` (only if SECOND_SERVER == yes)
-Use `~/.claude/cicd-templates/workflows/cd-production.yml` as base.
-
-### 5. `Dockerfile.production`
+### 4. `Dockerfile.production`
 Use `~/.claude/cicd-templates/Dockerfile.production` as base.
 
 Key substitutions:
@@ -189,7 +191,7 @@ Key substitutions:
 - `{{COPY_BUILD_ASSETS}}` — copy built assets if HAS_VITE
 - `{{APP_LABEL}}` — APP_NAME
 
-### 6. `docker-compose.prod.yaml`
+### 5. `docker-compose.prod.yaml`
 Use `~/.claude/cicd-templates/docker-compose.prod.yaml` as base.
 
 Key substitutions:
@@ -201,53 +203,61 @@ Key substitutions:
 - `{{NETWORK_NAME}}` — `{{APP_NAME_SLUG}}-prod`
 - `{{APP_NAME_SLUG}}` — for network and volume names
 
-### 7. `.dockerignore`
-Copy `~/.claude/cicd-templates/.dockerignore` verbatim.
+### 6. `.dockerignore`, PHP config, nginx config
+Copy verbatim from `~/.claude/cicd-templates/`:
+- `.dockerignore`
+- `docker/php/php.ini`, `docker/php/www.conf`, `docker/php/docker-entrypoint.sh`
+- `docker/nginx/nginx.conf`, `docker/nginx/conf.d/app.conf`
 
-### 8. `docker/php/php.ini`
-Copy `~/.claude/cicd-templates/docker/php/php.ini` verbatim.
-
-### 9. `docker/php/www.conf`
-Copy `~/.claude/cicd-templates/docker/php/www.conf` verbatim.
-
-### 10. `docker/php/docker-entrypoint.sh`
-Copy `~/.claude/cicd-templates/docker/php/docker-entrypoint.sh` verbatim.
-
-### 11. `docker/nginx/nginx.conf`
-Copy `~/.claude/cicd-templates/docker/nginx/nginx.conf` verbatim.
-
-### 12. `docker/nginx/conf.d/app.conf`
-Copy `~/.claude/cicd-templates/docker/nginx/conf.d/app.conf` verbatim.
-
-### 13. `.github/setup/server-setup.sh`
+### 7. `.github/setup/server-setup.sh`
 Use `~/.claude/cicd-templates/setup/server-setup.sh` as base.
 
-Key substitutions:
-- `{{APP_NAME_SLUG}}` — project name slug
-- `{{DEPLOY_PATH}}` — `/opt/{{APP_NAME_SLUG}}`
-- `{{GITHUB_REPO_OWNER}}` — GitHub username
-- `{{PROD_DOMAIN}}` — production domain
-- `{{PROD_PORT}}` — host port
+Key substitutions: `{{APP_NAME_SLUG}}`, `{{DEPLOY_PATH}}`, `{{GITHUB_REPO_OWNER}}`, `{{PROD_DOMAIN}}`, `{{PROD_PORT}}`
 
-### 14. `.github/setup/nginx-host.conf`
-Use `~/.claude/cicd-templates/setup/nginx-host.conf` as base.
+### 8. `.github/setup/nginx-host.conf`
+Use `~/.claude/cicd-templates/setup/nginx-host.conf` as base. Substitutions: `{{PROD_DOMAIN}}`, `{{PROD_PORT}}`
 
-Substitutions: `{{PROD_DOMAIN}}`, `{{PROD_PORT}}`
+### 9. `.github/secrets-reference.md`
+Use `~/.claude/cicd-templates/setup/secrets-reference.md` as base. Substitutions: `{{APP_NAME}}`, `{{PROD_DOMAIN}}`, `{{PROD_SERVER_IP}}`. Add any project-specific secrets detected (e.g. if M-Pesa keys found in .env.example).
 
-### 15. `.github/secrets-reference.md`
-Use `~/.claude/cicd-templates/setup/secrets-reference.md` as base.
+### 10. `.github/branch-protection.md`
+Copy `~/.claude/cicd-templates/setup/branch-protection.md`. Update the required status checks to match the actual CI job names generated.
 
-Substitutions: `{{APP_NAME}}`, `{{PROD_DOMAIN}}`, `{{PROD_SERVER_IP}}`
-
-Add any project-specific secrets detected (e.g. if M-Pesa keys found in .env.example).
-
-### 16. `.github/branch-protection.md`
-Copy `~/.claude/cicd-templates/setup/branch-protection.md`.
-Update the required status checks to match the actual CI job names generated.
+### 11. `cd-production.yml` (only if SECOND_SERVER == yes)
+Use `~/.claude/cicd-templates/workflows/cd-production.yml` as base.
 
 ---
 
-## STEP 4 — VERIFY `composer.json` SCRIPTS
+## Step 3.5 — Validate generated files
+
+**Do this every time, before Step 4.** Every real bug found in this template's history — nginx 404s on dynamic routes, a missing storage volume, a healthcheck bound to the wrong address, an invalid TLS block, a missing `storage:link` — was only caught by a client's live production deploy, never before it. That's the pattern to break. Run these checks against what you just generated and fix anything that fails before presenting the Step 5 checklist:
+
+```bash
+# 1. Compose file is syntactically valid (works without real secrets present)
+docker compose -f docker-compose.prod.yaml config --quiet \
+  && echo "OK: compose config valid" || echo "FAIL: compose config invalid"
+
+# 2. Nginx config is valid — check it in a throwaway container, not by eye
+docker run --rm \
+  -v "$(pwd)/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  -v "$(pwd)/docker/nginx/conf.d:/etc/nginx/conf.d:ro" \
+  nginx:1.27-alpine nginx -t
+
+# 3. No leftover template placeholders anywhere generated
+grep -rn '{{[A-Z_]*}}' .github/ docker/ Dockerfile.production docker-compose.prod.yaml 2>/dev/null \
+  && echo "FAIL: unresolved placeholders above" || echo "OK: no leftover placeholders"
+
+# 4. GitHub Actions workflow syntax, if actionlint is available
+command -v actionlint >/dev/null 2>&1 \
+  && actionlint .github/workflows/*.yml \
+  || echo "actionlint not installed — skip, don't block on it"
+```
+
+If check 1 or 2 fails, or check 3 finds a leftover placeholder, fix the generated file and re-run before moving on. Do not hand the user a "next steps" checklist for files that don't pass their own syntax check.
+
+---
+
+## Step 4 — Verify `composer.json` scripts
 
 Check that `composer.json` has the scripts expected by CI. If missing, add them and tell the user:
 
@@ -262,9 +272,9 @@ Check that `composer.json` has the scripts expected by CI. If missing, add them 
 
 ---
 
-## STEP 5 — POST-GENERATION CHECKLIST
+## Step 5 — Post-generation checklist
 
-After generating all files, print this checklist for the user:
+After generating and validating all files, print this checklist for the user:
 
 ```
 ✅ Files generated in: [list all files created]
@@ -294,7 +304,18 @@ Dockerfile check:
 
 ---
 
-## DECISION GUIDES
+## Destructive operations
+
+State exactly what will happen and get explicit confirmation before any of the following — never as a side effect of a larger "just set it all up" request:
+
+- **Running `php artisan migrate` or `tenants:migrate` against a production database** — even a purely additive, backward-compatible migration. This project's checkout points straight at production with no staging tier; confirm as its own explicit step every time, not folded into a bigger task.
+- **`docker compose -f docker-compose.prod.yaml down -v` or anything with `--volumes`/`docker volume rm`** — irreversibly deletes the `mysql_data`/`postgres_data`/`redis_data`/`storage` named volumes. If the goal is only to restart services, use `down` (no `-v`) or `restart`.
+- **Overwriting an existing `.env`, `docker-compose.prod.yaml`, or nginx config on the server** that isn't obviously a first-time setup — diff against what's already there first.
+- **Regenerating CI/CD files for a project that already has them** — confirm whether the intent is a full regenerate (loses any manual edits made on top of the templates) or a targeted patch to one file.
+
+---
+
+## Decision guides
 
 ### When to add PHPStan job vs inline lint
 - Add separate `analyse` job if `larastan/larastan` ≥ v3 is in composer.json
@@ -322,20 +343,20 @@ Dockerfile check:
 
 ---
 
-## COMMON PITFALLS TO AVOID
+## Common pitfalls to avoid
 
 1. **Never use `--no-ff` merge in auto-merge when the branch is already fast-forwardable** — use `--no-ff` for develop→main (preserves branch history) but either works
-
 2. **The `--env-file .image-tag.env` trick** — always write `APP_IMAGE_TAG=sha-${SHORT_SHA:0:7}` to `.image-tag.env` before compose commands; prevents race conditions between concurrent deploys
-
 3. **Run caches in a one-off container BEFORE starting the service** (sms-platform pattern) OR exec into the container AFTER it's healthy (pokeapay pattern) — both work, but never mix them mid-deploy
-
 4. **Horizon healthcheck must be disabled** — `healthcheck: disable: true` on the horizon service; it's a queue worker with no HTTP port
-
 5. **Network naming** — always set an explicit `networks.default.name` in docker-compose.prod.yaml to avoid Docker auto-naming conflicts when multiple projects run on the same host
-
 6. **Alpine sh** — doesn't support brace expansion `{a,b,c}`; use explicit paths in RUN commands
-
 7. **PHP extensions in the vendor stage** — use `--ignore-platform-reqs` in the composer stage; install real extensions in the PHP-FPM stage
-
 8. **The `</dev/null` heredoc drain** (SaccoMs lesson) — when using SSH heredoc with `docker compose exec -T`, pass `</dev/null` to each exec command to prevent the heredoc stdin from being consumed
+
+---
+
+## Related skills
+
+- End-to-end new project scaffold (which calls this skill as its last step): `new-project`
+- Roll back a bad production deployment: `rollback`
