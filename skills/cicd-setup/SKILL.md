@@ -185,23 +185,36 @@ Key substitutions:
 Use `~/.claude/cicd-templates/Dockerfile.production` as base.
 
 Key substitutions:
-- `{{PHP_VERSION}}` — e.g. `8.4`
-- `{{DB_PHP_EXT}}` — `pdo_mysql` or `pdo_pgsql pgsql`
-- `{{NODE_STAGE}}` — node builder stage if HAS_VITE, else empty
-- `{{COPY_BUILD_ASSETS}}` — copy built assets if HAS_VITE
+- `{{PHP_VERSION}}` — e.g. `8.4`. Only affects the base-image tag (`ghcr.io/godiah/php-base:{{PHP_VERSION}}-fpm-alpine`) — all PHP extensions are pre-installed in that base image, there is no per-database extension-install step to template.
 - `{{APP_LABEL}}` — APP_NAME
+
+**Conditional Node build stage — not a `{{PLACEHOLDER}}`.** This template ships the Node stage and the built-assets copy as commented-out blocks marked with bracket comments, not substitution tokens:
+```
+# [NODE_STAGE_BLOCK]: ...
+# FROM node:22-alpine AS assets
+...
+# [/NODE_STAGE_BLOCK]
+```
+and separately `# [COPY_VITE_ASSETS_BLOCK]: ... # [/COPY_VITE_ASSETS_BLOCK]`.
+
+- If `HAS_VITE == true`: activate **both** blocks — delete the two marker lines (`# [..._BLOCK]:` and `# [/..._BLOCK]`) and un-comment every line between them (strip the leading `# `).
+- If `HAS_VITE == false`: delete both blocks entirely, marker lines included, rather than leaving them commented out.
+Either way, no `[..._BLOCK]` marker text should remain in the final file — Step 3.5 checks for this.
 
 ### 5. `docker-compose.prod.yaml`
 Use `~/.claude/cicd-templates/docker-compose.prod.yaml` as base.
 
 Key substitutions:
-- `{{APP_IMAGE}}` — full GHCR app image
-- `{{NGINX_IMAGE}}` — full GHCR nginx image
 - `{{PROD_PORT}}` — host port for nginx (e.g. 8080)
-- `{{DB_SERVICE_BLOCK}}` — mysql or postgres service definition
-- `{{DB_VOLUME_NAME}}` — `mysql_data` or `postgres_data`
-- `{{NETWORK_NAME}}` — `{{APP_NAME_SLUG}}-prod`
-- `{{APP_NAME_SLUG}}` — for network and volume names
+- `{{APP_NAME_SLUG}}` — used inline for image refs, network name, and (via `{{GITHUB_REPO_OWNER}}`) the GHCR path — there's no separate `{{APP_IMAGE}}`/`{{NGINX_IMAGE}}`/`{{NETWORK_NAME}}` token, those are just Step 2's mental-model labels for the same substitution
+
+**Horizon service — not conditional on a placeholder.** The `horizon:` service ships live/active in the template (marked only with an orientation comment `# [HORIZON_SERVICE_BLOCK]:`, not a toggle):
+- If `HAS_HORIZON == true`: keep the service, but still delete the `# [HORIZON_SERVICE_BLOCK]:` marker comment line — it's authoring cruft, not something a generated project should ship with.
+- If `HAS_HORIZON == false`: delete the entire `horizon:` service block, marker comment included.
+
+**Database service — a block swap, not a substitution.** The template ships `mysql:` active and a full `postgres:` alternative commented out directly below it (with its own `postgres_data` volume already defined in the top-level `volumes:` section, also commented).
+- If `DB_TYPE == mysql`: leave as-is.
+- If `DB_TYPE == pgsql`: delete the `mysql:` service block, un-comment the `postgres:` block, and swap the volume reference from `mysql_data` to `postgres_data` in both the service's `volumes:` and the top-level `volumes:` section.
 
 ### 6. `.dockerignore`, PHP config, nginx config
 Copy verbatim from `~/.claude/cicd-templates/`:
@@ -233,19 +246,45 @@ Use `~/.claude/cicd-templates/workflows/cd-production.yml` as base.
 **Do this every time, before Step 4.** Every real bug found in this template's history — nginx 404s on dynamic routes, a missing storage volume, a healthcheck bound to the wrong address, an invalid TLS block, a missing `storage:link` — was only caught by a client's live production deploy, never before it. That's the pattern to break. Run these checks against what you just generated and fix anything that fails before presenting the Step 5 checklist:
 
 ```bash
-# 1. Compose file is syntactically valid (works without real secrets present)
+# 0. Compose needs a .env to exist to resolve env_file references and
+#    ${VAR} substitutions in docker-compose.prod.yaml. The real .env only
+#    ever exists on the server (never committed) — if the project doesn't
+#    have one yet, create a throwaway placeholder for check 1 only, then
+#    delete it again afterward. Never leave a fake .env behind, and never
+#    touch a real .env if one already exists.
+CREATED_ENV=false
+if [ ! -f .env ]; then
+  printf 'DB_PASSWORD=eval\nDB_DATABASE=eval\nDB_USERNAME=eval\n' > .env
+  CREATED_ENV=true
+fi
+
+# 1. Compose file is syntactically valid
 docker compose -f docker-compose.prod.yaml config --quiet \
   && echo "OK: compose config valid" || echo "FAIL: compose config invalid"
 
-# 2. Nginx config is valid — check it in a throwaway container, not by eye
+[ "$CREATED_ENV" = true ] && rm -f .env
+
+# 2. Nginx config is valid — check it in a throwaway container. --add-host
+#    stands in for the compose network's DNS: nginx resolves fastcgi_pass/
+#    proxy_pass upstream hostnames (e.g. "app") at config-parse time even
+#    outside a running stack, so a bare mount-and-test fails with "host
+#    not found in upstream" without this.
 docker run --rm \
+  --add-host=app:127.0.0.1 \
   -v "$(pwd)/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
   -v "$(pwd)/docker/nginx/conf.d:/etc/nginx/conf.d:ro" \
   nginx:1.27-alpine nginx -t
 
-# 3. No leftover template placeholders anywhere generated
+# 3. No leftover {{PLACEHOLDER}} tokens anywhere generated
 grep -rn '{{[A-Z_]*}}' .github/ docker/ Dockerfile.production docker-compose.prod.yaml 2>/dev/null \
   && echo "FAIL: unresolved placeholders above" || echo "OK: no leftover placeholders"
+
+# 3b. No leftover conditional-block markers. Dockerfile.production and
+#     docker-compose.prod.yaml encode some conditionals as bracket-comment
+#     blocks (see Step 3 items 4-5), not {{PLACEHOLDER}} tokens — check 3
+#     above won't catch an un-activated or un-deleted block.
+grep -rn '\[[A-Z_]*_BLOCK\]' . 2>/dev/null \
+  && echo "FAIL: leftover conditional-block marker above" || echo "OK: no leftover block markers"
 
 # 4. GitHub Actions workflow syntax, if actionlint is available
 command -v actionlint >/dev/null 2>&1 \
@@ -253,7 +292,7 @@ command -v actionlint >/dev/null 2>&1 \
   || echo "actionlint not installed — skip, don't block on it"
 ```
 
-If check 1 or 2 fails, or check 3 finds a leftover placeholder, fix the generated file and re-run before moving on. Do not hand the user a "next steps" checklist for files that don't pass their own syntax check.
+If check 1 or 2 fails, or check 3/3b finds a leftover placeholder or block marker, fix the generated file and re-run before moving on. Do not hand the user a "next steps" checklist for files that don't pass their own syntax check. These exact commands were run for real against `evals/fixtures/mysql-horizon-vite/` on 2026-09-27 — checks 1 and 2 as originally written both failed for reasons unrelated to the generated files themselves (missing `.env`, unresolvable upstream hostname); the versions above are the corrected form.
 
 ---
 
