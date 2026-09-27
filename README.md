@@ -103,6 +103,10 @@ The skill detects and adapts for:
 - **Second server** — optional `cd-production.yml` for promoting a build to a second VPS
 - **Deploy guard** — `PROD_READY=true` variable gates deploy until server is provisioned
 
+## Evals
+
+`evals/` holds manual regression checklists run against disposable fixture projects — a way to catch template/skill bugs before they reach a real client's first production deploy instead of after (see repo history for how many were found the hard way). See `evals/README.md`. Currently one runbook: `evals/cicd-setup.md` against `evals/fixtures/mysql-horizon-vite/`.
+
 ## Required GitHub Secrets (always)
 
 | Secret | Purpose |
